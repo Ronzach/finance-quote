@@ -32,6 +32,7 @@ use vars qw( $TD_URL);
 use LWP::UserAgent;
 use HTTP::Request::Common;
 use Carp;
+use HTML::TreeBuilder;
 
 # VERSION
 
@@ -39,8 +40,8 @@ use Carp;
 
 #$TD_URL = ("http://tdfunds.tdam.com/tden/FundProfile/FundProfile.cfm");
 #$TD_URL = ("http://tdfunds.tdam.com/tden/Download/v_DownloadProcess.cfm?SortField=FundName&SortOrder=ASC&Nav=No&Group=99&WhereClause=Where%20FC%2EFund%5FClass%5FORDER%20%3C%2099%20and%20TD%2ERisk%5FCat%5FID%20%21%3D%204&DownloadType=CSV");
-$TD_URL = ("http://www.tdassetmanagement.com/TDAMFunds/Download/v_Download.asp?TAB=PRICE&PID=10&DT=csv&SORT=TDAM_FUND_NAME&FT=all&MAP=N&SI=4");
-
+#$TD_URL = ("http://www.tdassetmanagement.com/TDAMFunds/Download/v_Download.asp?TAB=PRICE&PID=10&DT=csv&SORT=TDAM_FUND_NAME&FT=all&MAP=N&SI=4");
+$TD_URL = ("http://etfs.morningstar.com/quote-banner?&t=");
 my(%currencies) = (
 	"CDN"	=>	"CAD",
 	"US"	=>	"USD"
@@ -88,47 +89,56 @@ sub tdefunds_get_currency {
 sub tdefunds
 {
     my $quoter = shift;
-    my(@q,%aa,$ua,$url,$sym,$price);
+    my @stocks = @_;
+    my $quantity = @stocks;
+    my(@q,%aa,$ua,$url,$sym,$price,$currency,$last);
 
-    $url = $TD_URL;
+    foreach my $stock (@stocks) {
+    $sym = $stock;
+#    print "$sym \n";
+    $url = $TD_URL.$sym;
+#    print "$url \n";
     $ua = $quoter->user_agent;
     my $reply = $ua->request(GET $url);
     return unless ($reply->is_success);
-    foreach (split('\015?\012',$reply->content))
-    {
-        @q = $quoter->parse_csv($_);
+    my $text = $reply->content;
+    
+    my $tree = HTML::TreeBuilder->new_from_content($reply->content);
+#    $tree->parse($text);
+    $price = $tree->look_down('id', 'lastPrice');
+    if ($price) {
+	$price = $price->as_text;
+        $last = $tree->look_down('id', 'isDate')->as_text;
+        $currency = $tree->look_down('id', 'navCurrency')->as_text;
+    $last =~ s/[0-9]{2}:[0-9]{2}:[0-9]{2}//;
+    $last =~ s/ //;
+    $currency =~ s/ //;
+#    print "$price $last $currency\n";
 
-	# Skip the non-data rows.
-	next if (!defined($q[0]) || !defined($q[1])); # Skip the section headers
-	next if $q[0] =~ /^Fund Number/; # Skip the title
+}
 
-        ($sym = $q[1]) =~ s/^ +//;
-        if ($sym) {
+#    $price->dump();
+    if ($price =~ /^[0-9]+[.][0-9]{2}$/) {
 
-	    # make sure what we get looks like an acceptable stock symbol
-	    # only allow a-z + '.' + "^"
-	    my($name) = $sym;
-            $sym = &tdefunds_create_symbol($sym);
-
-	    # $sym =~ tr/a-z/A-Z/;
-            $aa {$sym, "symbol"} = $sym;
+           $aa {$sym, "symbol"} = $sym;
 	    $aa {$sym, "exchange"} = "TD Waterhouse";  # TRP
 	    $aa {$sym, "method"} = "tdefunds";
-	    $aa {$sym, "name"} = $name;
-	    $price = $q[3];
+	    $aa {$sym, "name"} = $sym;
 	    $price =~ s/\$//;
             $price =~ s/^ +//;
 	    $aa {$sym, "last"} = $price;
+            
 	    $quoter->store_date(\%aa, $sym, {usdate => $q[2]});
 	    $aa {$sym, "nav"} = $aa{$sym,"last"};
 	    $aa {$sym, "success"} = 1;
-	    $aa {$sym, "currency"} = &tdefunds_get_currency($q[4]);
-        } else {
+	    $aa {$sym, "currency"} = &tdefunds_get_currency($currency);    
+    }
+else {
 	    $aa {$sym, "success"} = 0;
 	    $aa {$sym, "errormsg"} = "Fund lookup failed.";
 	}
-    }
 
+}
     return %aa if wantarray;
     return \%aa;
 }
